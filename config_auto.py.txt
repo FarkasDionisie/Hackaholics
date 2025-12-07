@@ -1,0 +1,5 @@
+ESP32_IP = "192.168.43.84"
+
+STREAM_URL = f"http://{ESP32_IP}:81/stream"
+LED_ON_URL = f"http://{ESP32_IP}/led/on"
+LED_OFF_URL = f"http://{ESP32_IP}/led/off"

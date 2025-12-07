@@ -1,0 +1,58 @@
+import cv2
+
+
+def draw_military_hud(image, fps, weapons):
+    frame = image.copy()
+    h, w = frame.shape[:2]
+
+    # --- HUD verde militar ---
+    # Crosshair
+    cx, cy = w // 2, h // 2
+    cv2.line(frame, (cx - 40, cy), (cx + 40, cy), (0, 255, 0), 2)
+    cv2.line(frame, (cx, cy - 40), (cx, cy + 40), (0, 255, 0), 2)
+
+    # Colțuri tactice
+    thickness = 3
+    size = 70
+
+    # stânga sus
+    cv2.line(frame, (20, 20), (20 + size, 20), (0, 255, 0), thickness)
+    cv2.line(frame, (20, 20), (20, 20 + size), (0, 255, 0), thickness)
+
+    # dreapta sus
+    cv2.line(frame, (w - 20, 20), (w - 20 - size, 20), (0, 255, 0), thickness)
+    cv2.line(frame, (w - 20, 20), (w - 20, 20 + size), (0, 255, 0), thickness)
+
+    # Info bar sus
+    cv2.rectangle(frame, (0, 0), (w, 50), (0, 0, 0), -1)
+    cv2.putText(frame, f"FPS: {fps:.1f}", (15, 35),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+    # --- Dacă detectează arme: ALERTĂ ---
+    for weapon in weapons:
+        x1, y1, x2, y2 = map(int, weapon["box"])
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+
+        cv2.putText(frame,
+                    f"{weapon['label'].upper()} {weapon['conf']:.2f}",
+                    (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_DUPLEX,
+                    0.9,
+                    (0, 0, 255),
+                    2)
+
+        # Target lock
+        cv2.line(frame, (x1, y1), (x1 + 40, y1), (0, 0, 255), 3)
+        cv2.line(frame, (x1, y1), (x1, y1 + 40), (0, 0, 255), 3)
+
+        # Ecran alertă
+        cv2.rectangle(frame, (0, h - 80), (w, h), (0, 0, 0), -1)
+        cv2.putText(frame, "!!! WEAPON DETECTED !!!",
+                    (50, h - 30),
+                    cv2.FONT_HERSHEY_DUPLEX,
+                    1.2,
+                    (0, 0, 255),
+                    3)
+
+    return frame

@@ -1,0 +1,151 @@
+import cv2
+import numpy as np
+import threading
+import urllib.request
+import time
+from ultralytics import YOLO
+import torch
+from queue import Queue
+
+# =============================
+# CONFIGURARE
+# =============================
+ESP32_IP = "192.168.43.84"
+STREAM_URL = f"http://{ESP32_IP}:81/stream"
+LED_ON_URL = f"http://{ESP32_IP}/control?var=led_intensity&val=255"
+LED_OFF_URL = f"http://{ESP32_IP}/control?var=led_intensity&val=0"
+
+MODEL_PATH = "yolov8m.pt"
+
+WEAPON_THRESHOLD = 0.05  # mai sensibil pentru HVGA
+PERSON_THRESHOLD = 0.3
+
+PERSON_CLASS = 0
+WEAPON_CLASSES = {43: "knife", 76: "scissors", 34: "baseball bat"}
+
+# =============================
+# DEVICE CUDA
+# =============================
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"[INFO] Using device: {device}")
+
+# =============================
+# LOAD YOLO
+# =============================
+print("[INFO] Loading YOLOv8m model...")
+model = YOLO(MODEL_PATH)
+model.to(device)
+print("[INFO] Model loaded.")
+
+# =============================
+# STREAM ESP32 THREAD
+# =============================
+class ESP32StreamThread(threading.Thread):
+    def __init__(self, url, frame_queue, width=480, height=320):
+        super().__init__(daemon=True)
+        self.url = url
+        self.frame_queue = frame_queue
+        self.width = width
+        self.height = height
+        self.stop_event = threading.Event()
+
+    def run(self):
+        cap = cv2.VideoCapture(self.url)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        while not self.stop_event.is_set():
+            ret, frame = cap.read()
+            if ret:
+                if self.frame_queue.full():
+                    try: self.frame_queue.get_nowait()
+                    except: pass
+                self.frame_queue.put(frame)
+            else:
+                time.sleep(0.01)
+        cap.release()
+
+    def stop(self):
+        self.stop_event.set()
+
+# =============================
+# FUNCTIE TOGGLE LED
+# =============================
+led_status = False
+def toggle_led():
+    global led_status
+    try:
+        if not led_status:
+            urllib.request.urlopen(LED_ON_URL, timeout=0.5)
+            led_status = True
+            print(">>> LED ON")
+        else:
+            urllib.request.urlopen(LED_OFF_URL, timeout=0.5)
+            led_status = False
+            print(">>> LED OFF")
+    except:
+        print("!!! Error toggling LED")
+
+# =============================
+# DESEN CUTII
+# =============================
+def draw_person(frame, box, conf):
+    x1, y1, x2, y2 = map(int, box)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (0,255,0), 2)
+    cv2.putText(frame, f"PERSON {int(conf*100)}%", (x1,y1-5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
+
+def draw_weapon(frame, box, conf, name):
+    x1, y1, x2, y2 = map(int, box)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (0,0,255), 2)
+    cv2.putText(frame, f"{name.upper()} {int(conf*100)}%", (x1,y1-5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
+
+# =============================
+# MAIN LOOP OPTIMIZAT
+# =============================
+def main():
+    frame_queue = Queue(maxsize=2)
+    stream_thread = ESP32StreamThread(STREAM_URL, frame_queue)
+    stream_thread.start()
+    prev_time = time.time()
+
+    print("[INFO] SAFE-EAI HVGA detection started. Q=exit, L=LED toggle")
+
+    while True:
+        if frame_queue.empty():
+            time.sleep(0.01)
+            continue
+
+        frame = frame_queue.get()
+
+        # Detectie YOLO pe GPU
+        results = model(frame, device=device, verbose=False)[0]
+
+        for box in results.boxes:
+            cls = int(box.cls[0])
+            conf = float(box.conf[0])
+            xyxy = box.xyxy[0].tolist()
+            if cls == PERSON_CLASS and conf >= PERSON_THRESHOLD:
+                draw_person(frame, xyxy, conf)
+            elif cls in WEAPON_CLASSES and conf >= WEAPON_THRESHOLD:
+                draw_weapon(frame, xyxy, conf, WEAPON_CLASSES[cls])
+
+        # FPS
+        now = time.time()
+        fps = 1/(now - prev_time) if now-prev_time>0 else 0
+        prev_time = now
+        cv2.putText(frame, f"FPS: {int(fps)}", (10,20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0),2)
+
+        cv2.imshow("SAFE-EAI HVGA Detection", frame)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord("q"):
+            break
+        elif key == ord("l"):
+            toggle_led()
+
+    stream_thread.stop()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
